@@ -1,0 +1,61 @@
+name: note dashboard daily snapshot
+
+on:
+  schedule:
+    - cron: "0 9 * * *"   # 毎日 18:00 JST (= 09:00 UTC)
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  issues: write
+
+concurrency:
+  group: note-dashboard
+  cancel-in-progress: false
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Fetch dashboard stats
+        env:
+          NOTE_COOKIE: ${{ secrets.NOTE_COOKIE }}
+          NOTE_USERNAME: ${{ vars.NOTE_USERNAME || 'bright_lotus8230' }}
+        run: python3 note_dashboard/fetch_stats.py
+
+      - name: Build report
+        run: python3 note_dashboard/report.py
+
+      - name: Commit data and report
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data reports
+          git diff --cached --quiet || git commit -m "note dashboard snapshot $(TZ=Asia/Tokyo date +%F)"
+          git push
+
+      - name: Post report as issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh label create note-report --color 41C9B4 --force >/dev/null
+          gh issue create \
+            --title "note 定点観測レポート $(TZ=Asia/Tokyo date +%F)" \
+            --label note-report \
+            --body-file reports/issue_body.md
+
+      - name: Notify on failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh issue create \
+            --title "⚠ note 定点観測に失敗 $(TZ=Asia/Tokyo date +%F)" \
+            --body "ワークフローが失敗しました: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          Cookie の期限切れが多い原因です。Settings → Secrets → NOTE_COOKIE を更新してください。"
